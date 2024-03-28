@@ -22,7 +22,12 @@ pip install -r requirements.txt
 ```
 
 ### Starting and Stopping the Hogger
-To start the resource hogger, run:
+First, ensure that the bash scripts are executable:
+```bash
+chmod +x start_hogging.sh stop_hogging.sh
+```
+
+Then, to start the resource hogger, run:
 ```bash
 ./start_hogging.sh
 ```
