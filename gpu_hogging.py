@@ -6,14 +6,18 @@ import pynvml
 
 pynvml.nvmlInit()
 
-LOG_FILE_PATH = "gpu_hogging.log"
-ALLOCATION_RATIO = 0.98                 # Ratio of free memory to attempt to allocate
-CHECK_INTERVAL = 1                      # How often to check for memory availability in seconds
-REDUCED_CHECK_INTERVAL = 60             # Reduced check frequency when near full allocation
-TARGET_UTILIZATION = 99                 # Target GPU utilization percentage
-RESERVED_MEMORY_MB = 1000               # Amount of memory in MB to reserve for utilization workload
+# Non-adjustable constant parameters
+BYTES_PER_KB = 1024
 
-last_utilization = {}                   # Dict to store the last utilization value for each GPU
+# Adjustable constant parameters
+LOG_FILE_PATH = "gpu_hogging.log"
+ALLOCATION_RATIO = 0.94             # Ratio of free memory to attempt to allocate
+CHECK_INTERVAL = 1                  # How often to check for memory availability in seconds
+REDUCED_CHECK_INTERVAL = 60         # Reduced check frequency when near full allocation
+GPU_WORKLOAD_SIZE = 100             # Initial workload size for GPU Util, (most likely to need revision based on your GPU(s))
+RESERVED_MEMORY_UTIL = 1000         # Initial memory to reserve for utilization workload
+
+last_utilization = {}
 
 def log_message(gpu_id, message_type, message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -26,20 +30,22 @@ def hog_gpu_memory(gpu_id):
     torch.cuda.set_device(device)
     allocated_tensors = []
     near_full_allocation = False
+    handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
+    total_memory = pynvml.nvmlDeviceGetMemoryInfo(handle).total
     while True:
-        free_memory, total_memory = torch.cuda.mem_get_info()
-        free_memory_adjusted = free_memory - (RESERVED_MEMORY_MB * 1024 * 1024)
+        free_memory, _ = torch.cuda.mem_get_info()
+        free_memory_adjusted = free_memory - \
+            (RESERVED_MEMORY_UTIL * BYTES_PER_KB ** 2)
         tensor_size = int(free_memory_adjusted * ALLOCATION_RATIO // 4)
         if tensor_size > 0:
             tensor = torch.ones(
                 (tensor_size,), dtype=torch.float32, device=device)
             allocated_tensors.append(tensor)
-            free_memory_after, _ = torch.cuda.mem_get_info()
-            allocated_memory = (free_memory - free_memory_after) / 1024 / 1024
-            total_allocated_percentage = (
-                (total_memory - free_memory_after) / total_memory) * 100
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            allocated_memory = (mem_info.used) / BYTES_PER_KB ** 2
+            total_allocated_percentage = (mem_info.used / total_memory) * 100
             message = (
-                f"Allocated: {allocated_memory:.2f} MB | Total Memory: {total_memory / 1024 / 1024:.2f} MB | Total Hogged: {total_allocated_percentage:.2f}%")
+                f"Allocated: {allocated_memory:.2f} MiB | Total Memory: {total_memory / BYTES_PER_KB ** 2:.2f} MiB | Total Hogged: {total_allocated_percentage:.2f}%")
             log_message(gpu_id, "Memory", message)
             near_full_allocation = total_allocated_percentage > 95
         else:
@@ -58,11 +64,24 @@ def get_gpu_utilization(gpu_id):
     return utilization.gpu
 
 def continuous_workload(device):
+    torch.cuda.set_device(device)
+    workload_size = GPU_WORKLOAD_SIZE
     while True:
-        a = torch.randn(2000, 2000, device=device)
-        b = torch.randn(2000, 2000, device=device)
-        c = torch.matmul(a, b)
-        torch.cuda.synchronize(device)
+        try:
+            a = torch.randn(workload_size, workload_size, device=device)
+            b = torch.randn(workload_size, workload_size, device=device)
+            c = torch.matmul(a, b)
+            free_memory, _ = torch.cuda.mem_get_info(device)
+            if free_memory > workload_size * workload_size * 4 * 3:
+                workload_size = int(workload_size * 1.1)
+            else:
+                workload_size = max(100, int(workload_size * 0.9))
+        except RuntimeError as e:
+            if 'out of memory' in str(e):
+                workload_size = max(100, int(workload_size * 0.9))
+                torch.cuda.empty_cache()
+            else:
+                raise e
 
 def hog_gpu_utilization(gpu_id):
     device = f'cuda:{gpu_id}'
