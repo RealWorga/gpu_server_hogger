@@ -36,6 +36,7 @@ To stop the resource hogger, execute:
 ```bash
 ./stop_hogging.sh
 ```
+- Note: The log file is appended to, so remove the file if you need a fresh log.
 
 ## Configurations
 Modify the first-hand parameters in `gpu_hogging.py` to configure parameters such as allocation ratio and reserved memory.
