@@ -1,2 +1,2 @@
-torch==2.6.0
+torch==2.7.1
 pynvml==11.5.0
